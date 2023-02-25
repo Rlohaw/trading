@@ -13,46 +13,37 @@ class Candle:
         self.open = open
         self.close = close
         self.stamp = stamp
-        self.pvt = None
+        self.priority = 0
 
     def get_data(self):
         return self.high, self.low, self.open, self.close, self.stamp
 
     def __str__(self):
-        return f"High: {self.high} | Low: {self.low} | Open: {self.open} | Close: {self.stamp}"
+        return f"High: {self.high} | Low: {self.low} | Open: {self.open} | Close: {self.close} | Priority: {self.priority} | Stamp: {self.stamp}\n"
 
 
 class Graph:
     def __init__(self):
         self.data = None
         self.sp = []
+
         self.pvtss = []
         self.pvtsb = []
         self.fvgb = []
         self.fvgs = []
-        self.pvtn = 3
-
-    def add_candle(self, candle):
-        if isinstance(candle, Candle):
-            if candle not in self.sp:
-                for pvts in self.pvtss:
-                    if candle.high > pvts.high:
-                        self.pvtss.remove(pvts)
-                for pvtb in self.pvtsb:
-                    if candle.low < pvtb.low:
-                        self.pvtsb.remove(pvtb)
-                self.sp.append(candle)
+        self.pvtmax = 10
 
     def update(self, tick, start, end):
         data = pdr.get_data_moex(tick, start=start,
                                  end=end)
+
         new_data = (Candle(data['HIGH'][date],
                            data['LOW'][date],
                            data['OPEN'][date],
                            data['CLOSE'][date],
                            date) for date in data['OPEN'].keys())
         for cndl in new_data:
-            self.add_candle(cndl)
+            self.sp.append(cndl)
         self.set_pivots()
         self.set_fvgs()
 
@@ -60,39 +51,71 @@ class Graph:
         self.data['CLOSE'].plot(grid=True)
         plt.show()
 
-    def set_pivots(self):
-        n = self.pvtn
-        n = n + (n % 2 == 0)
-        m = self.sp
+    def set_pivots(self, n=3):
+        if self.pvtmax != n:
+            n = n + (n % 2 == 0)
+            m = self.sp
+            for i in range(n // 2, len(m) - (n // 2)):
+                if all(m[i + j].high < m[i].high for j in (a for a in range(-(n // 2), (n // 2) + 1) if a != 0)):
+                    # if dnd or not any(m[i].high < j.high and m[i].stamp < j.stamp for j in self.sp):
+                    if m[i].priority == 0:
+                        self.pvtss.append(m[i])
+                    m[i].priority = n
 
-        for i in range(n // 2, len(m) - (n // 2)):
-            if all(m[i + j].high < m[i].high for j in (a for a in range(-(n // 2), (n // 2) + 1) if a != 0)):
-                self.pvtss.append(m[i])
-            if all(m[i + j].low > m[i].low for j in (a for a in range(-(n // 2), (n // 2) + 1) if a != 0)):
-                self.pvtsb.append(m[i])
+                if all(m[i + j].low > m[i].low for j in (a for a in range(-(n // 2), (n // 2) + 1) if a != 0)):
+                    # if dnd or not any(m[i].low > j.low and m[i].stamp < j.stamp for j in self.sp):
+                    if m[i].priority == 0:
+                        self.pvtsb.append(m[i])
+                    m[i].priority = n
+            self.set_pivots(n + 1)
 
-        self.pvtsb = list(filter(lambda x: not any(x.low > i.low for i in self.sp if x.stamp < i.stamp), self.pvtsb))
-        self.pvtss = list(filter(lambda x: not any(x.high < i.high for i in self.sp if x.stamp < i.stamp), self.pvtss))
-
-    def set_fvgs(self):
+    def set_fvgs(self, dnd=False):
         for i in range(1, len(self.sp) - 1):
             a = self.sp[i - 1]
             b = self.sp[i + 1]
             if a.low > b.high:
+                # if dnd or not any(i.high < b.high and b.stamp < i.stamp for i in self.sp):
                 self.fvgs.append((a, b))
             if a.high < b.low:
+                # if dnd or not any(i.low < b.low and b.stamp < i.stamp for i in self.sp):
                 self.fvgb.append((a, b))
 
-        self.fvgb = list(
-            filter(lambda x: not any(i.low < x[1].low for i in self.sp if x[1].stamp < i.stamp), self.fvgb))
-        self.fvgs = list(
+    def strategy(self, priority=3):
+        sell_cond = False
+        sell_cndl = None
+        buy_cond = False
+        buy_cndl = None
+        break_cndl = None
+        for cndl in self.sp:
+            if not sell_cond:
+                for scndl in self.pvtsb:
+                    if scndl.low > cndl.low and scndl.stamp < cndl.stamp:
+                        sell_cond = True
+                        sell_cndl = scndl
+                        self.pvtsb.remove(scndl)
+                        break
+            if sell_cond:
+                for scndl in self.pvtss:
+                    if cndl.high > scndl.high and scndl.stamp < cndl.stamp:
+                        buy_cond = True
+                        buy_cndl = scndl
+                        break_cndl = cndl
+                        self.pvtss.remove(scndl)
+                        print(sell_cndl, buy_cndl, break_cndl)
+                        print()
+                        sell_cond = False
+                        sell_cndl = None
+                        buy_cond = False
+                        buy_cndl = None
+                        break_cndl = None
 
-            filter(lambda x: not any(i.high < x[1].high for i in self.sp if x[1].stamp < i.stamp), self.fvgs))
+                        break
 
 
 if __name__ == '__main__':
     ticker = 'USD000UTSTOM'
-    start = datetime.datetime(2022, 12, 19)
+    start = datetime.datetime(2022, 12, 21)
     end = datetime.datetime.now()
     graph = Graph()
     graph.update(ticker, start, end)
+    graph.strategy()
